@@ -1,2 +1,2 @@
 # Julia-Playground
-This repository will few parallel programs written in Julia.
+Few parallel programs written in Julia (CUDA).
