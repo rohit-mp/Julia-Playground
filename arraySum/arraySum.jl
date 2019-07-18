@@ -6,25 +6,30 @@ Pkg.add("BenchmarkTools")
 
 using CUDAnative, CUDAdrv, CuArrays, Test, BenchmarkTools
 
-function arraySum!(a)
-    index = Int(blockDim().x * (blockIdx().x - 1) + threadIdx().x)
-    ctr = 2
-    while ctr <= 1024
-        if(index % ctr == 1)
-            @inbounds a[index] += a[index+(ctr>>>1)]
+function arraySum(a, res)
+    index = blockDim().x * (blockIdx().x - 1) + threadIdx().x
+    tidx = threadIdx().x
+    
+    shared_a = @cuStaticSharedMem(Float32, 1024)
+    @inbounds shared_a[tidx] = a[index]
+    
+    ctr = 1
+    while ctr < 1024
+        if(tidx % (ctr*2) == 1)
+            @inbounds shared_a[tidx] += shared_a[tidx+ctr]
         end
-        ctr = ctr<<1
+        ctr *= 2
         sync_threads()
     end
     
-    if(Int(threadIdx().x) == 1 && index != 1)
-        @inbounds @atomic a[1] += a[index]
+    if(tidx == 1)
+        @atomic res[1] += shared_a[1]
     end
     return nothing
 end
 
-function bench!(d_a)
-    @sync @cuda blocks=ceil(Int, M/1024) threads=1024 arraySum!(d_a)
+function bench_parallel(d_a, d_res)
+    @sync @cuda blocks=ceil(Int, length(d_a)/1024) threads=1024 arraySum(d_a, d_res)
 end
 
 M = 10000000
@@ -32,13 +37,16 @@ M = 10000000
 h_a = rand(Float32, M)
 d_a = CuArray(h_a)
 
-result = 0
+h_res = 0.0f0
+
+d_res = [0.0f0]
+d_res = CuArray(d_res)
+
 for i = 1:M
-    result += h_a[i]
+    h_res += h_a[i]
 end
 
-bench!(d_a)
+bench_parallel(d_a, d_res)
 
-h_b = Array(d_a)
-
-@test isapprox(h_b[1], result)
+d_res = Array(d_res)
+@test isapprox(d_res[1], h_res)
